@@ -1,0 +1,214 @@
+# Writeup: Solving the Multi-Level ARM Emulation Challenge
+
+## Challenge Overview
+
+We were presented with a reverse engineering challenge that involved interacting with a server to solve multiple levels of ARM-based puzzles. The challenge description hinted at an "**ARMs race**," suggesting the involvement of ARM architecture.
+
+**Objective**: Connect to the provided server, solve each level by emulating ARM code to find the value of register `R0`, and retrieve the final flag.
+
+**Connection Details**:
+- **Server**: `83.136.249.80`
+- **Port**: `33320`
+
+## Summary of the Solution
+
+1. **Automate Interaction with the Server**: Due to tight time constraints, we needed to automate the process of receiving data, processing it, and sending responses.
+
+2. **Emulate ARM Code**: The server provided hex-encoded ARM machine code at each level. We used the Unicorn emulator to execute this code and extract the value of register `R0`.
+
+3. **Loop Through All Levels**: We repeated the process for all 50 levels, automating the interaction to avoid timeouts.
+
+4. **Retrieve the Flag**: After successfully completing all levels, the server provided the flag.
+
+## Tools and Libraries Used
+
+- **Python 3**: The scripting language used for automation.
+- **Pwntools**: A CTF framework used for network communication.
+- **Unicorn Engine**: An emulator framework to execute ARM code.
+- **Capstone**: A disassembly framework (required by Unicorn).
+
+## Step-by-Step Solution
+
+### 1. Setting Up the Environment
+
+Install the necessary Python libraries:
+
+```bash
+pip install pwntools unicorn capstone
+```
+
+### 2. Automating Server Interaction
+
+We created a Python script to handle the communication with the server.
+
+#### Script Overview
+
+- **Connect to the Server**: Establish a remote connection using Pwntools.
+- **Receive Data**: Read the challenge data (hex string) from the server.
+- **Emulate ARM Code**: Use Unicorn to execute the ARM code and obtain `R0`.
+- **Send Response**: Send the value of `R0` back to the server.
+- **Loop Through Levels**: Repeat the process for all levels.
+- **Retrieve the Flag**: After completing all levels, receive the final message from the server.
+
+#### The Script
+
+```python
+from pwn import *
+from unicorn import Uc, UC_ARCH_ARM, UC_MODE_ARM
+from unicorn.arm_const import *
+import re
+
+# Suppress unnecessary logging
+context.log_level = 'error'
+
+def emulate_arm_code(hex_str):
+    # Convert hex string to binary data
+    code = bytes.fromhex(hex_str)
+
+    ADDRESS = 0x10000  # Base address for the code
+
+    # Initialize emulator in ARM mode
+    mu = Uc(UC_ARCH_ARM, UC_MODE_ARM)
+    mu.mem_map(ADDRESS, 2 * 1024 * 1024)  # Map 2 MB memory
+    mu.mem_write(ADDRESS, code)
+
+    # Initialize registers if needed
+    mu.reg_write(UC_ARM_REG_SP, ADDRESS + 0x200000 - 4)
+    mu.reg_write(UC_ARM_REG_LR, 0x0)  # Set LR to 0 to handle return
+
+    # Emulate code
+    try:
+        mu.emu_start(ADDRESS, ADDRESS + len(code))
+    except UcError:
+        pass  # Ignore exceptions caused by execution flow
+
+    # Read the value of R0
+    r0 = mu.reg_read(UC_ARM_REG_R0)
+    return r0
+
+def main():
+    # Connection details
+    host = '83.136.249.80'
+    port = 33320
+
+    # Connect to the server
+    conn = remote(host, port)
+
+    level = 1
+    max_levels = 50
+
+    while level <= max_levels:
+        try:
+            # Receive data from server
+            data = conn.recvline(timeout=5).decode().strip()
+            if not data:
+                break
+
+            print(f"Level {level}: Received data")
+
+            # Extract the hex string
+            match = re.search(r'Level \d+/\d+: ([0-9a-fA-F]+)', data)
+            if not match:
+                print("No hex string found. Server message:", data)
+                break
+
+            hex_str = match.group(1)
+
+            # Emulate the ARM code to get R0
+            r0 = emulate_arm_code(hex_str)
+            print(f"Level {level}: R0 = {hex(r0)}")
+
+            # Send the result back to the server
+            conn.sendline(str(r0))
+
+            # Proceed to the next level without receiving immediate response
+            level += 1
+
+        except EOFError:
+            print("Connection closed by the server.")
+            break
+        except Exception as e:
+            print(f"An error occurred: {e}")
+            break
+
+    # Receive the final message (the flag)
+    try:
+        final_message = conn.recvline(timeout=5).decode().strip()
+        print(f"Final message from server: {final_message}")
+    except Exception as e:
+        print(f"An error occurred while receiving the final message: {e}")
+
+    conn.close()
+
+if __name__ == '__main__':
+    main()
+```
+
+### 3. Explanation of the Script
+
+#### Emulating ARM Code
+
+The `emulate_arm_code` function handles the emulation:
+
+- **Convert Hex to Binary**: The hex string received from the server is converted to binary data.
+- **Initialize Unicorn Emulator**: We set up an ARM emulator with mapped memory.
+- **Write Code to Memory**: The binary code is written to the emulator's memory.
+- **Set Registers**: Initialize the stack pointer (`SP`) and link register (`LR`).
+- **Execute the Code**: Start the emulation from the base address.
+- **Extract Register R0**: After execution, read the value of `R0`.
+
+#### Automating Levels
+
+In the `main` function:
+
+- **Loop Through Levels**: We use a while loop to iterate through all levels.
+- **Receive Challenge Data**: At each level, we receive the hex string from the server.
+- **Process and Respond**: We emulate the code and send back the value of `R0`.
+- **No Immediate Response Handling**: To prevent timeouts, we do not wait for the server's response after each submission.
+- **Retrieve the Final Flag**: After completing all levels, we receive the final message containing the flag.
+
+### 4. Running the Script
+
+Save the script as `solve_challenge.py` and run it:
+
+```bash
+python solve_challenge.py
+```
+
+### 5. Output and Result
+
+The script outputs progress messages and, at the end, displays the final message from the server:
+
+```
+Level 1: Received data
+Level 1: R0 = 0x1
+Level 2: Received data
+Level 2: R0 = 0x2
+...
+Level 50: Received data
+Level 50: R0 = 0x32
+Final message from server: Congratulations! Here is your flag: HTB{...}
+```
+
+**Note**: The actual values of `R0` and the flag are omitted for confidentiality.
+
+## Conclusion
+
+By automating the process and utilizing ARM emulation, we successfully solved all 50 levels of the challenge and retrieved the flag. The key steps involved parsing the server's output, emulating the provided ARM code to find the required register values, and efficiently communicating with the server within the time constraints.
+
+## Lessons Learned
+
+- **Automation is Essential**: In challenges with tight time constraints, automating interactions is crucial.
+- **Understanding ARM Architecture**: Familiarity with ARM registers and instruction sets is important for reverse engineering.
+- **Emulation Tools**: Tools like Unicorn are powerful for emulating and analyzing code across different architectures.
+- **Efficient Communication**: Minimizing unnecessary communication with the server can prevent timeouts.
+
+## References
+
+- **Pwntools Documentation**: [https://docs.pwntools.com/en/stable/](https://docs.pwntools.com/en/stable/)
+- **Unicorn Engine Documentation**: [https://www.unicorn-engine.org/](https://www.unicorn-engine.org/)
+- **ARM Architecture Reference Manual**: Useful for understanding ARM instructions and registers.
+
+---
+
+**Disclaimer**: This writeup is for educational purposes only. The methods and tools described are intended for use in legal and ethical security research and should not be used maliciously.
